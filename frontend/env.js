@@ -1,0 +1,6 @@
+export const REACT_APP_FIREBASE_API_KEY= "AIzaSyD4-kdpU_zWyck1Y_oQQG80s64cjH44MlY"
+export const REACT_APP_FIREBASE_AUTH_DOMAIN= "psoriasisseveritytracker.firebaseapp.com"
+export const REACT_APP_FIREBASE_PROJECT_ID= "psoriasisseveritytracker"
+export const REACT_APP_FIREBASE_STORAGE_BUCKET= "psoriasisseveritytracker.firebasestorage.app"
+export const REACT_APP_FIREBASE_MESSAGING_SENDER_ID= "249468158450"
+export const REACT_APP_FIREBASE_APP_ID= "1:249468158450:web:b8359175e1a50921526b6b"
