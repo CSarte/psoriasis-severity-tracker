@@ -16,6 +16,8 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+console.log("projectId:", app.options.projectId);
+console.log("storageBucket:", app.options.storageBucket);
 
 export const db = getFirestore(app);
 export const auth = getAuth(app);
