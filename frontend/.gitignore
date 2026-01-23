@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 
 *env.js
+
+# Vite timestamp/temp files
+vite.config.*.timestamp-*.mjs
+*.timestamp-*.mjs
