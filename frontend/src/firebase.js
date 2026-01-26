@@ -1,10 +1,12 @@
-
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-import * as env from "/env";
+import * as env from "/env"; // ✅ correct import
 
+// Optional debug (remove after confirming it works)
+console.log("VITE projectId:", import.meta.env.VITE_FIREBASE_PROJECT_ID);
+console.log("env projectId:", env.REACT_APP_FIREBASE_PROJECT_ID);
 
 const firebaseConfig = {
   apiKey: env.REACT_APP_FIREBASE_API_KEY,
@@ -16,8 +18,6 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-console.log("projectId:", app.options.projectId);
-console.log("storageBucket:", app.options.storageBucket);
 
 export const db = getFirestore(app);
 export const auth = getAuth(app);
