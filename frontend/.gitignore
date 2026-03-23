@@ -65,3 +65,4 @@ vite.config.*.timestamp-*.mjs
 # Debug / temp outputs
 # ======================
 ../backend/debug_overlay.png
+../imageannotation_pga/
