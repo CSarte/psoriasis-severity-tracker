@@ -1,7 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { storage, db, auth } from "../firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { collection, addDoc, getDocs, serverTimestamp } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  serverTimestamp,
+  doc,
+  onSnapshot,
+} from "firebase/firestore";
 
 export default function Upload() {
   const [file, setFile] = useState(null);
@@ -10,10 +17,11 @@ export default function Upload() {
   const [submitted, setSubmitted] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
-
+  const [showMask, setShowMask] = useState(false);
   const [history, setHistory] = useState([]);
 
-  // ✅ On mount, fetch previous severities from Firestore
+  const unsubscribeRef = useRef(null);
+
   useEffect(() => {
     const fetchHistory = async () => {
       if (!auth.currentUser?.uid) return;
@@ -26,6 +34,7 @@ export default function Upload() {
         const severities = snapshot.docs
           .map((doc) => doc.data().severity)
           .filter((s) => s !== undefined && s !== null);
+
         setHistory(severities);
       } catch (err) {
         console.error("Failed to fetch history:", err);
@@ -34,63 +43,93 @@ export default function Upload() {
     };
 
     fetchHistory();
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
   }, []);
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (!selectedFile) return;
+
     setFile(selectedFile);
     setPreview(URL.createObjectURL(selectedFile));
     setSubmitted(false);
     setAiResult(null);
     setUploadError(null);
+    setShowMask(false);
+
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
   };
 
   const handleUpload = async (file, severity, summary) => {
-    if (!auth.currentUser?.uid) throw new Error("No authenticated user.");
+    if (!auth.currentUser?.uid) {
+      throw new Error("No authenticated user.");
+    }
 
     const uid = auth.currentUser.uid;
     const safeName = file.name.replace(/\//g, "_");
-    const storageRef = ref(storage, `users/${uid}/photos/${Date.now()}_${safeName}`);
 
-    // Upload file
+    const storagePath = `users/${uid}/photos/${Date.now()}_${safeName}`;
+    const storageRef = ref(storage, storagePath);
+
     await uploadBytes(storageRef, file);
-
-    // Get download URL
     const downloadURL = await getDownloadURL(storageRef);
 
-    // Save metadata to Firestore
+    console.log("Upload downloadURL:", downloadURL);
+    console.log("Upload storagePath:", storagePath);
+
     const photosRef = collection(db, "users", uid, "photos");
-    await addDoc(photosRef, {
+    const docRef = await addDoc(photosRef, {
       url: downloadURL,
+      storagePath,
       severity,
       summary,
       createdAt: serverTimestamp(),
+      segmentation: {
+        status: "queued",
+      },
     });
 
-    return downloadURL;
+    return { downloadURL, photoId: docRef.id, storagePath };
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!file) return alert("Please select a file.");
+
+    if (!file) {
+      alert("Please select a file.");
+      return;
+    }
+
+    if (!auth.currentUser?.uid) {
+      setUploadError("You must be logged in to upload.");
+      return;
+    }
 
     setUploading(true);
     setUploadError(null);
 
     try {
-      // Generate new severity
       const newSeverity = Math.floor(Math.random() * 10) + 1;
       const updatedHistory = [...history, newSeverity];
       setHistory(updatedHistory);
 
-      // Calculate average based on current history
       const average =
         updatedHistory.length === 1
           ? newSeverity
-          : (updatedHistory.reduce((sum, val) => sum + val, 0) / updatedHistory.length).toFixed(1);
+          : (
+              updatedHistory.reduce((sum, val) => sum + val, 0) /
+              updatedHistory.length
+            ).toFixed(1);
 
-      // Determine trend
       const trend =
         updatedHistory.length === 1
           ? "stable"
@@ -102,12 +141,73 @@ export default function Upload() {
 
       const summary = `Average severity: ${average}/10. Overall trend: ${trend}.`;
 
-      // Upload file
-      const uploadedUrl = await handleUpload(file, newSeverity, summary);
+      const { downloadURL, photoId } = await handleUpload(file, newSeverity, summary);
 
-      setPreview(uploadedUrl);
-      setAiResult({ severity: newSeverity, summary, url: uploadedUrl });
+      setPreview(downloadURL);
+      setAiResult({
+        id: photoId,
+        severity: newSeverity,
+        summary,
+        url: downloadURL,
+        segmentationStatus: "queued",
+        maskUrl: null,
+      });
       setSubmitted(true);
+
+      const uid = auth.currentUser.uid;
+
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+
+      unsubscribeRef.current = onSnapshot(
+        doc(db, "users", uid, "photos", photoId),
+        (snap) => {
+          if (!snap.exists()) return;
+
+          const data = snap.data();
+          console.log("Photo snapshot update full:", JSON.stringify(data, null, 2));
+          console.log("Segmentation object:", data.segmentation);
+          console.log("Segmentation status:", data.segmentation?.status);
+          console.log("Mask URL:", data.segmentation?.maskUrl);
+
+          setAiResult((prev) => ({
+            ...prev,
+            id: photoId,
+            url: data.url || prev?.url,
+            severity: data.severity ?? prev?.severity,
+            summary: data.summary ?? prev?.summary,
+            segmentationStatus: data.segmentation?.status || "queued",
+            maskUrl: data.segmentation?.maskUrl || null,
+          }));
+        },
+        (error) => {
+          console.error("Snapshot listener error:", error);
+        }
+      );
+
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+
+      if (!backendUrl) {
+        throw new Error("Missing VITE_BACKEND_URL environment variable.");
+      }
+
+      const response = await fetch(`${backendUrl}/segment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          uid,
+          photoId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || "Segmentation request failed.");
+      }
     } catch (err) {
       console.error(err);
       setUploadError(err.message || "Upload failed");
@@ -118,6 +218,22 @@ export default function Upload() {
 
   const severityToColor = (severity) =>
     severity <= 3 ? "#22c55e" : severity <= 6 ? "#eab308" : "#ef4444";
+
+  const formatSegmentationStatus = (status) => {
+    switch (status) {
+      case "queued":
+        return "Queued";
+      case "running":
+      case "processing":
+        return "Processing";
+      case "done":
+        return "Done";
+      case "error":
+        return "Error";
+      default:
+        return status || "Queued";
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 p-6 flex flex-col items-center">
@@ -133,34 +249,74 @@ export default function Upload() {
           onChange={handleFileChange}
           className="border p-2 rounded w-full"
         />
+
         <button
           type="submit"
-          className="bg-secondary text-white px-6 py-3 rounded-lg shadow hover:bg-blue-600 transition w-full"
+          className="bg-secondary text-white px-6 py-3 rounded-lg shadow hover:bg-blue-600 transition w-full disabled:opacity-50"
           disabled={uploading}
         >
-          Submit
+          {uploading ? "Submitting..." : "Submit"}
         </button>
-        {uploading && <p className="text-blue-500 mt-2">Uploading...</p>}
+
+        {uploading && (
+          <p className="text-blue-500 mt-2">
+            Uploading image and starting segmentation...
+          </p>
+        )}
+
         {!uploading && submitted && !uploadError && (
           <p className="text-green-500 mt-2">Upload successful!</p>
         )}
+
         {uploadError && <p className="text-red-500 mt-2">{uploadError}</p>}
       </form>
 
       {submitted && aiResult && (
         <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl">
-          <div className="flex-1 bg-white rounded-lg shadow-md p-4 flex items-center justify-center">
-            {aiResult.url ? (
-              <img
-                src={aiResult.url}
-                alt="Uploaded"
-                className="w-full h-96 object-cover rounded"
-              />
-            ) : (
-              <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded">
-                <span className="text-gray-500">No image uploaded</span>
-              </div>
-            )}
+          <div className="flex-1 bg-white rounded-lg shadow-md p-4">
+            <div className="relative w-full h-96">
+              {aiResult.url ? (
+                <img
+                  src={aiResult.url}
+                  alt="Uploaded"
+                  className="w-full h-96 object-cover rounded"
+                  onError={() => {
+                    console.error("Original image failed to load:", aiResult.url);
+                  }}
+                />
+              ) : (
+                <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded">
+                  <span className="text-gray-500">No image uploaded</span>
+                </div>
+              )}
+
+              {showMask && aiResult.maskUrl && (
+                <img
+                  src={aiResult.maskUrl}
+                  alt="Segmentation mask"
+                  className="absolute inset-0 w-full h-96 object-cover rounded pointer-events-none"
+                  style={{ opacity: 1 }}
+                  onError={() => {
+                    console.error("Mask image failed to load:", aiResult.maskUrl);
+                  }}
+                />
+              )}
+            </div>
+
+            <div className="mt-4 flex items-center gap-3 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowMask((prev) => !prev)}
+                disabled={!aiResult.maskUrl}
+                className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+              >
+                {showMask ? "Hide Segmentation" : "Show Segmentation"}
+              </button>
+
+              <span className="text-sm text-gray-600">
+                Segmentation: {formatSegmentationStatus(aiResult.segmentationStatus)}
+              </span>
+            </div>
           </div>
 
           <div className="flex-1 flex flex-col items-center bg-white rounded-lg shadow-md p-4">
@@ -180,6 +336,7 @@ export default function Upload() {
                 const x = centerX + radius * Math.cos(Math.PI - angleRad);
                 const y = centerY - radius * Math.sin(angleRad);
                 const largeArcFlag = angleDeg > 180 ? 1 : 0;
+
                 return (
                   <path
                     d={`M10 110 A90 90 0 ${largeArcFlag} 1 ${x} ${y}`}

@@ -1,7 +1,6 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { auth, db, storage } from "../firebase";
-import { useNavigate } from "react-router-dom";
 import { collection, onSnapshot, deleteDoc, doc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 
@@ -30,12 +29,13 @@ export default function Dashboard() {
       unsubscribeSnap = onSnapshot(
         photosCollection,
         (snapshot) => {
-          const photos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-          setPastPhotos(photos);
+          const photos = snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
 
-          // Update severity history dynamically
-          const sevHistory = photos.map((p) => p.severity);
-          setHistory(sevHistory);
+          setPastPhotos(photos);
+          setHistory(photos.map((p) => Number(p.severity)).filter((n) => !Number.isNaN(n)));
         },
         (error) => {
           console.error("Firestore listener error:", error);
@@ -50,41 +50,47 @@ export default function Dashboard() {
   }, [navigate]);
 
   const deletePhoto = async (photo) => {
-    if (!user) return;
+    if (!user?.uid) {
+      console.error("No authenticated user for delete.");
+      return;
+    }
 
     try {
-        // Delete from Firestore
-        const docRef = doc(db, "users", user.uid, "photos", photo.id);
-        await deleteDoc(docRef);
+      console.log("Deleting photo:", photo);
 
-        // Delete from Storage
-        const storageRef = ref(storage, photo.url.split("?")[0].split("/o/")[1]);
-        await deleteObject(storageRef);
+      if (photo.storagePath) {
+        const fileRef = ref(storage, photo.storagePath);
+        await deleteObject(fileRef);
+      } else {
+        console.warn("Photo missing storagePath. Skipping Storage delete for older record.");
+      }
 
-        // Update local state
-        const updatedPhotos = pastPhotos.filter((p) => p.id !== photo.id);
-        setPastPhotos(updatedPhotos);
+      if (photo.segmentation?.maskPath) {
+        const maskRef = ref(storage, photo.segmentation.maskPath);
+        await deleteObject(maskRef).catch((err) => {
+          console.warn("Mask delete failed:", err);
+        });
+      }
 
-        // Recalculate history
-        const updatedHistory = updatedPhotos.map((p) => Number(p.severity));
-        setHistory(updatedHistory);
-
+      const docRef = doc(db, "users", user.uid, "photos", photo.id);
+      await deleteDoc(docRef);
     } catch (err) {
-        console.error("Failed to delete photo:", err);
+      console.error("Failed to delete photo:", err);
     }
-};
-
+  };
 
   const sortedPhotos = [...pastPhotos].sort(
-    (a, b) => new Date(b.createdAt?.toDate?.() || b.createdAt) - new Date(a.createdAt?.toDate?.() || a.createdAt)
+    (a, b) =>
+      new Date(b.createdAt?.toDate?.() || b.createdAt) -
+      new Date(a.createdAt?.toDate?.() || a.createdAt)
   );
 
-  // Calculate average severity and trend
   const severities = history;
   const averageSeverity =
-  severities.length > 0
-        ? (severities.reduce((sum, s) => sum + s, 0) / severities.length).toFixed(1)
-        : 0;
+    severities.length > 0
+      ? (severities.reduce((sum, s) => sum + s, 0) / severities.length).toFixed(1)
+      : 0;
+
   const trend =
     severities.length > 1
       ? severities[severities.length - 1] > severities[0]
@@ -172,13 +178,18 @@ export default function Dashboard() {
                   src={photo.url}
                   alt={`Past upload ${idx}`}
                   className="w-full h-48 object-cover"
+                  onError={() => {
+                    console.error("Dashboard image failed to load:", photo.url);
+                  }}
                 />
+
                 <button
                   onClick={() => deletePhoto(photo)}
                   className="absolute top-2 right-2 bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700"
                 >
                   Delete
                 </button>
+
                 <div className="p-4">
                   <p className="font-semibold">Severity: {photo.severity}</p>
                   <p className="text-sm text-gray-600">

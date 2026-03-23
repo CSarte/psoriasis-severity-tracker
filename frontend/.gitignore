@@ -1,4 +1,6 @@
+# ======================
 # Logs
+# ======================
 logs
 *.log
 npm-debug.log*
@@ -7,12 +9,24 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# ======================
+# Node / Frontend
+# ======================
 node_modules
 dist
 dist-ssr
 *.local
 
-# Editor directories and files
+# ======================
+# Env files (IMPORTANT)
+# ======================
+.env
+.env.*
+*.env.local
+
+# ======================
+# Editor / OS junk
+# ======================
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -23,8 +37,31 @@ dist-ssr
 *.sln
 *.sw?
 
-*env.js
-
-# Vite timestamp/temp files
+# ======================
+# Vite temp files
+# ======================
 vite.config.*.timestamp-*.mjs
 *.timestamp-*.mjs
+
+# ======================
+# Python / Backend
+# ======================
+../backend/venv/
+../backend/__pycache__/
+../backend/**/*.pyc
+
+# ======================
+# Backend secrets (CRITICAL)
+# ======================
+../backend/.env
+../backend/serviceAccountKey.json
+
+# ======================
+# ML / Model files
+# ======================
+../backend/weights/
+
+# ======================
+# Debug / temp outputs
+# ======================
+../backend/debug_overlay.png
