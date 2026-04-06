@@ -66,3 +66,4 @@ vite.config.*.timestamp-*.mjs
 # ======================
 ../backend/debug_overlay.png
 ../imageannotation_pga/
+../imageannotation_pga_backup/
